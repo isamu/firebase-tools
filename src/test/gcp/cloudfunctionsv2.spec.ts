@@ -2,7 +2,7 @@ import { expect } from "chai";
 
 import * as cloudfunctionsv2 from "../../gcp/cloudfunctionsv2";
 import * as backend from "../../deploy/functions/backend";
-import * as v2events from "../../functions/events/v2";
+import * as events from "../../functions/events";
 import * as projectConfig from "../../functions/projectConfig";
 
 describe("cloudfunctionsv2", () => {
@@ -19,7 +19,6 @@ describe("cloudfunctionsv2", () => {
     entryPoint: "function",
     runtime: "nodejs16",
     codebase: projectConfig.DEFAULT_CODEBASE,
-    labels: { [cloudfunctionsv2.CODEBASE_LABEL]: projectConfig.DEFAULT_CODEBASE },
   };
 
   const CLOUD_FUNCTION_V2_SOURCE: cloudfunctionsv2.StorageSource = {
@@ -39,8 +38,9 @@ describe("cloudfunctionsv2", () => {
         },
         environmentVariables: {},
       },
-      serviceConfig: {},
-      labels: { [cloudfunctionsv2.CODEBASE_LABEL]: projectConfig.DEFAULT_CODEBASE },
+      serviceConfig: {
+        availableMemory: `${backend.DEFAULT_MEMORY}Mi`,
+      },
     };
 
   const RUN_URI = "https://id-nonce-region-project.run.app";
@@ -54,19 +54,27 @@ describe("cloudfunctionsv2", () => {
   };
 
   describe("megabytes", () => {
+    enum Bytes {
+      KB = 1e3,
+      MB = 1e6,
+      GB = 1e9,
+      KiB = 1 << 10,
+      MiB = 1 << 20,
+      GiB = 1 << 30,
+    }
     it("Should handle decimal SI units", () => {
-      expect(cloudfunctionsv2.megabytes("1000k")).to.equal(1);
-      expect(cloudfunctionsv2.megabytes("1.5M")).to.equal(1.5);
-      expect(cloudfunctionsv2.megabytes("1G")).to.equal(1000);
+      expect(cloudfunctionsv2.mebibytes("1000k")).to.equal((1000 * Bytes.KB) / Bytes.MiB);
+      expect(cloudfunctionsv2.mebibytes("1.5M")).to.equal((1.5 * Bytes.MB) / Bytes.MiB);
+      expect(cloudfunctionsv2.mebibytes("1G")).to.equal(Bytes.GB / Bytes.MiB);
     });
     it("Should handle binary SI units", () => {
-      expect(cloudfunctionsv2.megabytes("1Mi")).to.equal((1 << 20) / 1e6);
-      expect(cloudfunctionsv2.megabytes("1Gi")).to.equal((1 << 30) / 1e6);
+      expect(cloudfunctionsv2.mebibytes("1Mi")).to.equal(Bytes.MiB / Bytes.MiB);
+      expect(cloudfunctionsv2.mebibytes("1Gi")).to.equal(Bytes.GiB / Bytes.MiB);
     });
     it("Should handle no unit", () => {
-      expect(cloudfunctionsv2.megabytes("100000")).to.equal(0.1);
-      expect(cloudfunctionsv2.megabytes("1e9")).to.equal(1000);
-      expect(cloudfunctionsv2.megabytes("1.5E6")).to.equal(1.5);
+      expect(cloudfunctionsv2.mebibytes("100000")).to.equal(100000 / Bytes.MiB);
+      expect(cloudfunctionsv2.mebibytes("1e9")).to.equal(1e9 / Bytes.MiB);
+      expect(cloudfunctionsv2.mebibytes("1.5E6")).to.equal((1.5 * 1e6) / Bytes.MiB);
     });
   });
   describe("functionFromEndpoint", () => {
@@ -76,7 +84,7 @@ describe("cloudfunctionsv2", () => {
           { ...ENDPOINT, httpsTrigger: {}, platform: "gcfv1" },
           CLOUD_FUNCTION_V2_SOURCE
         );
-      }).to.throw;
+      }).to.throw();
     });
 
     it("should copy a minimal function", () => {
@@ -148,6 +156,44 @@ describe("cloudfunctionsv2", () => {
           "deployment-taskqueue": "true",
         },
       });
+
+      expect(
+        cloudfunctionsv2.functionFromEndpoint(
+          {
+            ...ENDPOINT,
+            platform: "gcfv2",
+            blockingTrigger: {
+              eventType: events.v1.BEFORE_CREATE_EVENT,
+            },
+          },
+          CLOUD_FUNCTION_V2_SOURCE
+        )
+      ).to.deep.equal({
+        ...CLOUD_FUNCTION_V2,
+        labels: {
+          ...CLOUD_FUNCTION_V2.labels,
+          [cloudfunctionsv2.BLOCKING_LABEL]: "before-create",
+        },
+      });
+
+      expect(
+        cloudfunctionsv2.functionFromEndpoint(
+          {
+            ...ENDPOINT,
+            platform: "gcfv2",
+            blockingTrigger: {
+              eventType: events.v1.BEFORE_SIGN_IN_EVENT,
+            },
+          },
+          CLOUD_FUNCTION_V2_SOURCE
+        )
+      ).to.deep.equal({
+        ...CLOUD_FUNCTION_V2,
+        labels: {
+          ...CLOUD_FUNCTION_V2.labels,
+          [cloudfunctionsv2.BLOCKING_LABEL]: "before-sign-in",
+        },
+      });
     });
 
     it("should copy trival fields", () => {
@@ -167,6 +213,13 @@ describe("cloudfunctionsv2", () => {
         environmentVariables: {
           FOO: "bar",
         },
+        secretEnvironmentVariables: [
+          {
+            secret: "MY_SECRET",
+            key: "MY_SECRET",
+            projectId: "project",
+          },
+        ],
       };
 
       const fullGcfFunction: Omit<
@@ -183,6 +236,13 @@ describe("cloudfunctionsv2", () => {
           environmentVariables: {
             FOO: "bar",
           },
+          secretEnvironmentVariables: [
+            {
+              secret: "MY_SECRET",
+              key: "MY_SECRET",
+              projectId: "project",
+            },
+          ],
           vpcConnector: "connector",
           vpcConnectorEgressSettings: "ALL_TRAFFIC",
           ingressSettings: "ALLOW_ALL",
@@ -200,7 +260,7 @@ describe("cloudfunctionsv2", () => {
         ...ENDPOINT,
         platform: "gcfv2",
         eventTrigger: {
-          eventType: v2events.PUBSUB_PUBLISH_EVENT,
+          eventType: events.v2.PUBSUB_PUBLISH_EVENT,
           eventFilters: {
             topic: "projects/p/topics/t",
             serviceName: "pubsub.googleapis.com",
@@ -219,7 +279,7 @@ describe("cloudfunctionsv2", () => {
       > = {
         ...CLOUD_FUNCTION_V2,
         eventTrigger: {
-          eventType: v2events.PUBSUB_PUBLISH_EVENT,
+          eventType: events.v2.PUBSUB_PUBLISH_EVENT,
           pubsubTopic: "projects/p/topics/t",
           eventFilters: [
             {
@@ -233,7 +293,7 @@ describe("cloudfunctionsv2", () => {
           maxInstanceCount: 42,
           minInstanceCount: 1,
           timeoutSeconds: 15,
-          availableMemory: "128M",
+          availableMemory: "128Mi",
           environmentVariables: { FUNCTION_SIGNATURE_TYPE: "cloudevent" },
         },
       };
@@ -272,7 +332,7 @@ describe("cloudfunctionsv2", () => {
         platform: "gcfv2",
         uri: RUN_URI,
         eventTrigger: {
-          eventType: v2events.PUBSUB_PUBLISH_EVENT,
+          eventType: events.v2.PUBSUB_PUBLISH_EVENT,
           eventFilters: { topic: "projects/p/topics/t" },
           retry: false,
         },
@@ -281,7 +341,7 @@ describe("cloudfunctionsv2", () => {
         cloudfunctionsv2.endpointFromFunction({
           ...HAVE_CLOUD_FUNCTION_V2,
           eventTrigger: {
-            eventType: v2events.PUBSUB_PUBLISH_EVENT,
+            eventType: events.v2.PUBSUB_PUBLISH_EVENT,
             pubsubTopic: "projects/p/topics/t",
           },
         })
@@ -363,6 +423,40 @@ describe("cloudfunctionsv2", () => {
       });
     });
 
+    it("should translate beforeCreate blocking functions", () => {
+      expect(
+        cloudfunctionsv2.endpointFromFunction({
+          ...HAVE_CLOUD_FUNCTION_V2,
+          labels: { "deployment-blocking": "before-create" },
+        })
+      ).to.deep.equal({
+        ...ENDPOINT,
+        blockingTrigger: {
+          eventType: events.v1.BEFORE_CREATE_EVENT,
+        },
+        platform: "gcfv2",
+        uri: RUN_URI,
+        labels: { "deployment-blocking": "before-create" },
+      });
+    });
+
+    it("should translate beforeSignIn blocking functions", () => {
+      expect(
+        cloudfunctionsv2.endpointFromFunction({
+          ...HAVE_CLOUD_FUNCTION_V2,
+          labels: { "deployment-blocking": "before-sign-in" },
+        })
+      ).to.deep.equal({
+        ...ENDPOINT,
+        blockingTrigger: {
+          eventType: events.v1.BEFORE_SIGN_IN_EVENT,
+        },
+        platform: "gcfv2",
+        uri: RUN_URI,
+        labels: { "deployment-blocking": "before-sign-in" },
+      });
+    });
+
     it("should copy optional fields", () => {
       const extraFields: backend.ServiceConfiguration = {
         ingressSettings: "ALLOW_ALL",
@@ -384,7 +478,7 @@ describe("cloudfunctionsv2", () => {
             ...extraFields,
             vpcConnector: vpc.connector,
             vpcConnectorEgressSettings: vpc.egressSettings,
-            availableMemory: "128M",
+            availableMemory: "128Mi",
           },
           labels: {
             foo: "bar",

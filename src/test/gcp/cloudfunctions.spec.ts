@@ -4,6 +4,7 @@ import * as nock from "nock";
 import { functionsOrigin } from "../../api";
 
 import * as backend from "../../deploy/functions/backend";
+import { BEFORE_CREATE_EVENT, BEFORE_SIGN_IN_EVENT } from "../../functions/events/v1";
 import * as cloudfunctions from "../../gcp/cloudfunctions";
 import * as projectConfig from "../../functions/projectConfig";
 
@@ -21,14 +22,12 @@ describe("cloudfunctions", () => {
     entryPoint: "function",
     runtime: "nodejs16",
     codebase: projectConfig.DEFAULT_CODEBASE,
-    labels: { [cloudfunctions.CODEBASE_LABEL]: projectConfig.DEFAULT_CODEBASE },
   };
 
   const CLOUD_FUNCTION: Omit<cloudfunctions.CloudFunction, cloudfunctions.OutputOnlyFields> = {
     name: "projects/project/locations/region/functions/id",
     entryPoint: "function",
     runtime: "nodejs16",
-    labels: { [cloudfunctions.CODEBASE_LABEL]: projectConfig.DEFAULT_CODEBASE },
   };
 
   const HAVE_CLOUD_FUNCTION: cloudfunctions.CloudFunction = {
@@ -56,7 +55,7 @@ describe("cloudfunctions", () => {
           { ...ENDPOINT, platform: "gcfv2", httpsTrigger: {} },
           UPLOAD_URL
         );
-      }).to.throw;
+      }).to.throw();
     });
 
     it("should copy a minimal function", () => {
@@ -186,6 +185,52 @@ describe("cloudfunctions", () => {
       );
     });
 
+    it("detects beforeCreate blocking functions", () => {
+      const blockingEndpoint: backend.Endpoint = {
+        ...ENDPOINT,
+        blockingTrigger: {
+          eventType: BEFORE_CREATE_EVENT,
+        },
+      };
+      const blockingFunction: Omit<cloudfunctions.CloudFunction, cloudfunctions.OutputOnlyFields> =
+        {
+          ...CLOUD_FUNCTION,
+          sourceUploadUrl: UPLOAD_URL,
+          httpsTrigger: {},
+          labels: {
+            ...CLOUD_FUNCTION.labels,
+            [cloudfunctions.BLOCKING_LABEL]: "before-create",
+          },
+        };
+
+      expect(cloudfunctions.functionFromEndpoint(blockingEndpoint, UPLOAD_URL)).to.deep.equal(
+        blockingFunction
+      );
+    });
+
+    it("detects beforeSignIn blocking functions", () => {
+      const blockingEndpoint: backend.Endpoint = {
+        ...ENDPOINT,
+        blockingTrigger: {
+          eventType: BEFORE_SIGN_IN_EVENT,
+        },
+      };
+      const blockingFunction: Omit<cloudfunctions.CloudFunction, cloudfunctions.OutputOnlyFields> =
+        {
+          ...CLOUD_FUNCTION,
+          sourceUploadUrl: UPLOAD_URL,
+          httpsTrigger: {},
+          labels: {
+            ...CLOUD_FUNCTION.labels,
+            [cloudfunctions.BLOCKING_LABEL]: "before-sign-in",
+          },
+        };
+
+      expect(cloudfunctions.functionFromEndpoint(blockingEndpoint, UPLOAD_URL)).to.deep.equal(
+        blockingFunction
+      );
+    });
+
     it("should export codebase as label", () => {
       expect(
         cloudfunctions.functionFromEndpoint(
@@ -294,6 +339,46 @@ describe("cloudfunctions", () => {
         taskQueueTrigger: {},
         labels: {
           "deployment-taskqueue": "true",
+        },
+      });
+    });
+
+    it("should translate beforeCreate blocking triggers", () => {
+      expect(
+        cloudfunctions.endpointFromFunction({
+          ...HAVE_CLOUD_FUNCTION,
+          httpsTrigger: {},
+          labels: {
+            "deployment-blocking": "before-create",
+          },
+        })
+      ).to.deep.equal({
+        ...ENDPOINT,
+        blockingTrigger: {
+          eventType: BEFORE_CREATE_EVENT,
+        },
+        labels: {
+          "deployment-blocking": "before-create",
+        },
+      });
+    });
+
+    it("should translate beforeSignIn blocking triggers", () => {
+      expect(
+        cloudfunctions.endpointFromFunction({
+          ...HAVE_CLOUD_FUNCTION,
+          httpsTrigger: {},
+          labels: {
+            "deployment-blocking": "before-sign-in",
+          },
+        })
+      ).to.deep.equal({
+        ...ENDPOINT,
+        blockingTrigger: {
+          eventType: BEFORE_SIGN_IN_EVENT,
+        },
+        labels: {
+          "deployment-blocking": "before-sign-in",
         },
       });
     });

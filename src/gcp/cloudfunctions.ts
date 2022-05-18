@@ -4,6 +4,7 @@ import { FirebaseError } from "../error";
 import { logger } from "../logger";
 import { previews } from "../previews";
 import * as backend from "../deploy/functions/backend";
+import * as events from "../functions/events";
 import * as utils from "../utils";
 import * as proto from "./proto";
 import * as runtimes from "../deploy/functions/runtimes";
@@ -11,10 +12,23 @@ import * as iam from "./iam";
 import * as projectConfig from "../functions/projectConfig";
 import { Client } from "../apiv2";
 import { functionsOrigin } from "../api";
+import { AUTH_BLOCKING_EVENTS } from "../functions/events/v1";
 
 export const API_VERSION = "v1";
 export const CODEBASE_LABEL = "firebase-functions-codebase";
 const client = new Client({ urlPrefix: functionsOrigin, apiVersion: API_VERSION });
+
+export const BLOCKING_LABEL = "deployment-blocking";
+
+const BLOCKING_LABEL_KEY_TO_EVENT: Record<string, typeof AUTH_BLOCKING_EVENTS[number]> = {
+  "before-create": "providers/cloud.auth/eventTypes/user.beforeCreate",
+  "before-sign-in": "providers/cloud.auth/eventTypes/user.beforeSignIn",
+};
+
+const BLOCKING_EVENT_TO_LABEL_KEY: Record<typeof AUTH_BLOCKING_EVENTS[number], string> = {
+  "providers/cloud.auth/eventTypes/user.beforeCreate": "before-create",
+  "providers/cloud.auth/eventTypes/user.beforeSignIn": "before-sign-in",
+};
 
 interface Operation {
   name: string;
@@ -356,12 +370,13 @@ export async function updateFunction(
   cloudFunction: Omit<CloudFunction, OutputOnlyFields>
 ): Promise<Operation> {
   const endpoint = `/${cloudFunction.name}`;
-  // Keys in labels and environmentVariables are user defined, so we don't recurse
+  // Keys in labels and environmentVariables and secretEnvironmentVariables are user defined, so we don't recurse
   // for field masks.
   const fieldMasks = proto.fieldMasks(
     cloudFunction,
     /* doNotRecurseIn...=*/ "labels",
-    "environmentVariables"
+    "environmentVariables",
+    "secretEnvironmentVariables"
   );
 
   // Failure policy is always an explicit policy and is only signified by the presence or absence of
@@ -489,10 +504,14 @@ export function endpointFromFunction(gcfFunction: CloudFunction): backend.Endpoi
     trigger = {
       callableTrigger: {},
     };
+  } else if (gcfFunction.labels?.[BLOCKING_LABEL]) {
+    trigger = {
+      blockingTrigger: {
+        eventType: BLOCKING_LABEL_KEY_TO_EVENT[gcfFunction.labels[BLOCKING_LABEL]],
+      },
+    };
   } else if (gcfFunction.httpsTrigger) {
     trigger = { httpsTrigger: {} };
-    uri = gcfFunction.httpsTrigger.url;
-    securityLevel = gcfFunction.httpsTrigger.securityLevel;
   } else {
     trigger = {
       eventTrigger: {
@@ -501,6 +520,11 @@ export function endpointFromFunction(gcfFunction: CloudFunction): backend.Endpoi
         retry: !!gcfFunction.eventTrigger!.failurePolicy?.retry,
       },
     };
+  }
+
+  if (gcfFunction.httpsTrigger) {
+    uri = gcfFunction.httpsTrigger.url;
+    securityLevel = gcfFunction.httpsTrigger.securityLevel;
   }
 
   if (!runtimes.isValidRuntime(gcfFunction.runtime)) {
@@ -604,6 +628,15 @@ export function functionFromEndpoint(
   } else if (backend.isTaskQueueTriggered(endpoint)) {
     gcfFunction.httpsTrigger = {};
     gcfFunction.labels = { ...gcfFunction.labels, "deployment-taskqueue": "true" };
+  } else if (backend.isBlockingTriggered(endpoint)) {
+    gcfFunction.httpsTrigger = {};
+    gcfFunction.labels = {
+      ...gcfFunction.labels,
+      [BLOCKING_LABEL]:
+        BLOCKING_EVENT_TO_LABEL_KEY[
+          endpoint.blockingTrigger.eventType as typeof AUTH_BLOCKING_EVENTS[number]
+        ],
+    };
   } else {
     gcfFunction.httpsTrigger = {};
     if (backend.isCallableTriggered(endpoint)) {
@@ -641,9 +674,14 @@ export function functionFromEndpoint(
       "egressSettings"
     );
   }
-  gcfFunction.labels = {
-    ...gcfFunction.labels,
-    [CODEBASE_LABEL]: endpoint.codebase || projectConfig.DEFAULT_CODEBASE,
-  };
+  const codebase = endpoint.codebase || projectConfig.DEFAULT_CODEBASE;
+  if (codebase !== projectConfig.DEFAULT_CODEBASE) {
+    gcfFunction.labels = {
+      ...gcfFunction.labels,
+      [CODEBASE_LABEL]: codebase,
+    };
+  } else {
+    delete gcfFunction.labels?.[CODEBASE_LABEL];
+  }
   return gcfFunction;
 }

@@ -4,6 +4,7 @@ import { FirebaseError } from "../../../../../error";
 import * as backend from "../../../../../deploy/functions/backend";
 import { Runtime } from "../../../../../deploy/functions/runtimes";
 import * as v1alpha1 from "../../../../../deploy/functions/runtimes/discovery/v1alpha1";
+import { BEFORE_CREATE_EVENT } from "../../../../../functions/events/v1";
 
 const PROJECT = "project";
 const REGION = "region";
@@ -83,6 +84,7 @@ describe("backendFromV1Alpha1", () => {
         vpcConnectorEgressSettings: {},
         labels: "yes",
         ingressSettings: true,
+        cpu: "gcf_gen6",
       };
       for (const [key, value] of Object.entries(invalidFunctionEntries)) {
         it(`invalid value for CloudFunction key ${key}`, () => {
@@ -256,13 +258,46 @@ describe("backendFromV1Alpha1", () => {
       }
     });
 
+    describe("blockingTriggers", () => {
+      const validTrigger: backend.BlockingTrigger = {
+        eventType: BEFORE_CREATE_EVENT,
+        options: {
+          accessToken: true,
+          idToken: false,
+          refreshToken: true,
+        },
+      };
+
+      const invalidOptions = {
+        eventType: true,
+        options: 11,
+      };
+
+      for (const [key, value] of Object.entries(invalidOptions)) {
+        it(`invalid value for blocking trigger key ${key}`, () => {
+          const blockingTrigger = {
+            ...validTrigger,
+            [key]: value,
+          };
+          assertParserError({
+            endpoints: {
+              func: { ...MIN_ENDPOINT, blockingTrigger },
+            },
+          });
+        });
+      }
+    });
+
     it("detects missing triggers", () => {
       assertParserError({ endpoints: MIN_ENDPOINT });
     });
   }); // Parser errors;
 
   describe("allows valid backends", () => {
-    const DEFAULTED_ENDPOINT: Omit<backend.Endpoint, "httpsTrigger"> = {
+    const DEFAULTED_ENDPOINT: Omit<
+      backend.Endpoint,
+      "httpsTrigger" | "secretEnvironmentVariables"
+    > = {
       ...MIN_ENDPOINT,
       platform: "gcfv2",
       id: "id",
@@ -360,6 +395,52 @@ describe("backendFromV1Alpha1", () => {
         eventTrigger: {
           ...eventTrigger,
           eventFilters: { topic: `projects/${PROJECT}/topics/my-topic` },
+        },
+      });
+      const parsed = v1alpha1.backendFromV1Alpha1(yaml, PROJECT, REGION, RUNTIME);
+      expect(parsed).to.deep.equal(expected);
+    });
+
+    it("copies blocking triggers", () => {
+      const blockingTrigger: backend.BlockingTrigger = {
+        eventType: BEFORE_CREATE_EVENT,
+        options: {
+          accessToken: true,
+          idToken: false,
+          refreshToken: true,
+        },
+      };
+      const yaml: v1alpha1.Manifest = {
+        specVersion: "v1alpha1",
+        endpoints: {
+          id: {
+            ...MIN_ENDPOINT,
+            blockingTrigger,
+          },
+        },
+      };
+      const expected = backend.of({ ...DEFAULTED_ENDPOINT, blockingTrigger });
+      const parsed = v1alpha1.backendFromV1Alpha1(yaml, PROJECT, REGION, RUNTIME);
+      expect(parsed).to.deep.equal(expected);
+    });
+
+    it("copies blocking triggers without options", () => {
+      const blockingTrigger: backend.BlockingTrigger = {
+        eventType: BEFORE_CREATE_EVENT,
+      };
+      const yaml: v1alpha1.Manifest = {
+        specVersion: "v1alpha1",
+        endpoints: {
+          id: {
+            ...MIN_ENDPOINT,
+            blockingTrigger,
+          },
+        },
+      };
+      const expected = backend.of({
+        ...DEFAULTED_ENDPOINT,
+        blockingTrigger: {
+          ...blockingTrigger,
         },
       });
       const parsed = v1alpha1.backendFromV1Alpha1(yaml, PROJECT, REGION, RUNTIME);
@@ -473,6 +554,13 @@ describe("backendFromV1Alpha1", () => {
         },
         ingressSettings: "ALLOW_INTERNAL_ONLY",
         serviceAccountEmail: "sa@",
+        secretEnvironmentVariables: [
+          {
+            key: "SECRET",
+            secret: "SECRET",
+            projectId: "project",
+          },
+        ],
       };
 
       const yaml: v1alpha1.Manifest = {
@@ -482,6 +570,13 @@ describe("backendFromV1Alpha1", () => {
             ...MIN_ENDPOINT,
             httpsTrigger: {},
             ...fields,
+            secretEnvironmentVariables: [
+              {
+                key: "SECRET",
+                // Missing "secret"
+                projectId: "project",
+              },
+            ],
           },
         },
       };

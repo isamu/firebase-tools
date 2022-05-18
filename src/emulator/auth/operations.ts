@@ -74,6 +74,7 @@ export const authOperations: AuthOps = {
     projects: {
       createSessionCookie,
       queryAccounts,
+      getConfig,
       updateConfig,
       accounts: {
         _: signUp,
@@ -1703,7 +1704,6 @@ function grantToken(
   assert(reqBody.refreshToken, "MISSING_REFRESH_TOKEN");
 
   const refreshTokenRecord = state.validateRefreshToken(reqBody.refreshToken);
-  assert(refreshTokenRecord, "INVALID_REFRESH_TOKEN");
   assert(!refreshTokenRecord.user.disabled, "USER_DISABLED");
   const tokens = issueTokens(state, refreshTokenRecord.user, refreshTokenRecord.provider, {
     extraClaims: refreshTokenRecord.extraClaims,
@@ -1998,6 +1998,19 @@ function mfaSignInFinalize(
     idToken,
     refreshToken,
   };
+}
+
+function getConfig(
+  state: ProjectState,
+  reqBody: unknown,
+  ctx: ExegesisContext
+): Schemas["GoogleCloudIdentitytoolkitAdminV2Config"] {
+  // Shouldn't error on this but need assertion for type checking
+  assert(
+    state instanceof AgentProjectState,
+    "((Can only get top-level configurations on agent projects.))"
+  );
+  return state.config;
 }
 
 function updateConfig(
